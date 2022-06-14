@@ -1,11 +1,10 @@
 const std = @import("std");
 const Managed = std.math.big.int.Managed;
-const print = std.debug.print;
+const ArrayList = std.ArrayList;
 const expect = std.testing.expect;
 const eql = std.mem.eql;
-const ArrayList = std.ArrayList;
 
-const characters = [58]u8{ '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z' };
+const characters = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
 pub fn encode(allocator: std.mem.Allocator, content: []const u8) ![]const u8 {
     if (content.len == 0) return "";
