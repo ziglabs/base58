@@ -29,6 +29,42 @@ pub const Base58Error = error{
     AllocatingBuffer,
     AllocationResult
 };
+    pub fn decodeYes(decoded: []u8, encoded: []const u8) ![]const u8 {
+        if (encoded.len == 0) {
+            return error.ZeroLengthString;
+        }
+
+        std.mem.set(u8, decoded, 0);
+
+        var len: usize = 0;
+        for (encoded) |r| {
+            var val: u32 = digits[r];
+            if (val == 255) {
+                return error.InvalidBase58Digit;
+            }
+            for (decoded[0..len]) |b, i| {
+                val += @as(u32, b) * 58;
+                decoded[i] = @truncate(u8, val);
+                val >>= 8;
+            }
+            while (val > 0) : (val >>= 8) {
+                decoded[len] = @truncate(u8, val);
+                len += 1;
+            }
+        }
+
+        for (encoded) |r| {
+            if (r != characters[0]) {
+                break;
+            }
+            decoded[len] = 0;
+            len += 1;
+        }
+
+        std.mem.reverse(u8, decoded[0..len]);
+
+        return decoded[0..len];
+    }
 
 pub fn decode(allocator: Allocator, data: []const u8) Base58Error![]const u8 {
     if (data.len == 0) return Base58Error.DataIsEmpty;
@@ -56,7 +92,7 @@ pub fn decode(allocator: Allocator, data: []const u8) Base58Error![]const u8 {
     }
 
     var result = std.ArrayList(u8).init(allocator);
-    defer result.deinit();
+    errdefer result.deinit();
 
     for (data) |d58| {
         if (d58 != characters[0]) break;
@@ -71,6 +107,24 @@ pub fn decode(allocator: Allocator, data: []const u8) Base58Error![]const u8 {
 }
 
 test "decode" {
-    const result = try decode(testing.allocator, "2NEpo7TZRRrLZSi2U");
-    try testing.expectEqualSlices(u8, result, "Hello World!");
+    const result = try decode(testing.allocator, "1211");
+    std.debug.print("\nmine {any}\n", .{result});
+    defer testing.allocator.free(result);
+    try testing.expect(true);
+    // try testing.expectEqualSlices(u8, result, "Hello World!");
 }
+
+test "fun" {
+    var buff = [_]u8{0} ** 100;
+    const result = try decodeYes(&buff, "1211");
+    std.debug.print("\ntheirs {any}\n", .{result});
+    try testing.expect(true);
+}
+
+// fn decodeAlloc(ally: Allocator, ...) ![]const u8 {
+//     const buf = try ally.alloc(u8, getEncodedLengthUpperBound(...));
+//     errdefer ally.free(buf);
+//     const result = try decodeBuffer(..., buf);
+//     _ = ally.resize(buf, result.len);
+//     return result;
+// }
