@@ -22,49 +22,7 @@ const digits = [128]u8{
     55, 56, 57, 255, 255, 255, 255, 255, // 120-127
 };
 
-pub const Base58Error = error{
-    DataIsEmpty,
-    InvalidCharacter,
-    CarryNotZero,
-    AllocatingBuffer,
-    AllocationResult
-};
-    pub fn decodeYes(decoded: []u8, encoded: []const u8) ![]const u8 {
-        if (encoded.len == 0) {
-            return error.ZeroLengthString;
-        }
-
-        std.mem.set(u8, decoded, 0);
-
-        var len: usize = 0;
-        for (encoded) |r| {
-            var val: u32 = digits[r];
-            if (val == 255) {
-                return error.InvalidBase58Digit;
-            }
-            for (decoded[0..len]) |b, i| {
-                val += @as(u32, b) * 58;
-                decoded[i] = @truncate(u8, val);
-                val >>= 8;
-            }
-            while (val > 0) : (val >>= 8) {
-                decoded[len] = @truncate(u8, val);
-                len += 1;
-            }
-        }
-
-        for (encoded) |r| {
-            if (r != characters[0]) {
-                break;
-            }
-            decoded[len] = 0;
-            len += 1;
-        }
-
-        std.mem.reverse(u8, decoded[0..len]);
-
-        return decoded[0..len];
-    }
+pub const Base58Error = error{ DataIsEmpty, InvalidCharacter, CarryNotZero, AllocatingBuffer, AllocationResult };
 
 pub fn decode(allocator: Allocator, data: []const u8) Base58Error![]const u8 {
     if (data.len == 0) return Base58Error.DataIsEmpty;
@@ -77,12 +35,12 @@ pub fn decode(allocator: Allocator, data: []const u8) Base58Error![]const u8 {
 
     for (data) |d58| {
         if (d58 >= digits.len) return Base58Error.InvalidCharacter;
-        var carry: u32 = switch(digits[d58]) {
+        var carry: u32 = switch (digits[d58]) {
             255 => return Base58Error.InvalidCharacter,
-            else => @as(u32, d58),
+            else => @as(u32, digits[d58]),
         };
         var index = buffer.len - 1;
-        while(true) : (index -= 1) {
+        while (true) : (index -= 1) {
             carry += @as(u32, buffer[index]) * 58;
             buffer[index] = @truncate(u8, carry);
             carry /= 256;
@@ -90,7 +48,6 @@ pub fn decode(allocator: Allocator, data: []const u8) Base58Error![]const u8 {
         }
         if (carry != 0) return Base58Error.CarryNotZero;
     }
-
     var result = std.ArrayList(u8).init(allocator);
     errdefer result.deinit();
 
@@ -102,23 +59,16 @@ pub fn decode(allocator: Allocator, data: []const u8) Base58Error![]const u8 {
     for (buffer) |b| {
         if (b != 0) result.append(b) catch return Base58Error.AllocationResult;
     }
-    
+
     return result.toOwnedSlice();
 }
 
 test "decode" {
     const result = try decode(testing.allocator, "1211");
-    std.debug.print("\nmine {any}\n", .{result});
+    std.debug.print("\n{any}\n", .{result});
     defer testing.allocator.free(result);
     try testing.expect(true);
     // try testing.expectEqualSlices(u8, result, "Hello World!");
-}
-
-test "fun" {
-    var buff = [_]u8{0} ** 100;
-    const result = try decodeYes(&buff, "1211");
-    std.debug.print("\ntheirs {any}\n", .{result});
-    try testing.expect(true);
 }
 
 // fn decodeAlloc(ally: Allocator, ...) ![]const u8 {
@@ -127,4 +77,12 @@ test "fun" {
 //     const result = try decodeBuffer(..., buf);
 //     _ = ally.resize(buf, result.len);
 //     return result;
+// }
+
+// fn shrink(ally: Allocator, buf: anytype, new_size: usize) @TypeOf(buf) {
+//     if (ally.resize(buf, new_size)) return buf;
+
+//     const new_buf = try ally.dupe(std.meta.Child(@TypeOf(buf)), buf);
+//     ally.free(buf);
+//     return new_buf;
 // }
