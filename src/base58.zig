@@ -56,9 +56,12 @@ pub fn decode(allocator: Allocator, data: []const u8) Base58Error![]const u8 {
         result.append(0) catch return Base58Error.AllocationResult;
     }
 
-    for (buffer) |b| {
-        if (b != 0) result.append(b) catch return Base58Error.AllocationResult;
+    var i: usize = 0;
+    while (i < buffer.len) : (i += 1) {
+        const b = buffer.ptr[i];
+        if (b != 0) break;
     }
+    result.appendSlice(buffer[i..]) catch return error.AllocationResult;
 
     return result.toOwnedSlice();
 }
