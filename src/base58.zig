@@ -185,26 +185,26 @@ pub fn comptimeGetEncodedLength(comptime decoded: []const u8) usize {
 test "decodeWithBuffer" {
     var buffer: [100]u8 = undefined;
     const td = testing_data();
-    for (td) |data| {
-        const result = try decodeWithBuffer(&buffer, data.encoded);
-        try testing.expectEqualSlices(u8, result, data.decoded);
+    for (td) |d| {
+        const result = try decodeWithBuffer(&buffer, d.encoded);
+        try testing.expectEqualSlices(u8, result, d.decoded);
     }
 }
 
 test "decodeWithAllocator" {
     const td = testing_data();
-    for (td) |data| {
-        const result = try decodeWithAllocator(testing.allocator, data.encoded);
-        try testing.expectEqualSlices(u8, result, data.decoded);
+    for (td) |d| {
+        const result = try decodeWithAllocator(testing.allocator, d.encoded);
+        try testing.expectEqualSlices(u8, result, d.decoded);
         testing.allocator.free(result);
     }
 }
 
 test "comptimeDecode" {
     const td = comptime testing_data();
-    inline for (td) |data| {
-        const result = comptimeDecode(data.encoded);
-        try testing.expectEqualSlices(u8, &result, data.decoded);
+    inline for (td) |d| {
+        const result = comptimeDecode(d.encoded);
+        try testing.expectEqualSlices(u8, &result, d.decoded);
     }
 }
 
@@ -216,30 +216,30 @@ test "comptimeGetDecodedLength" {
     try testing.expect(5 == comptimeGetDecodedLength("111211"));
 }
 
-// // encode
+// encode
 test "encodeWithBuffer" {
     var buffer: [100]u8 = undefined;
     const td = testing_data();
-    for (td) |data| {
-        const result = try encodeWithBuffer(&buffer, data.decoded);
-        try testing.expectEqualSlices(u8, result, data.encoded);
+    for (td) |d| {
+        const result = try encodeWithBuffer(&buffer, d.decoded);
+        try testing.expectEqualSlices(u8, result, d.encoded);
     }
 }
 
 test "encodeWithAllocator" {
     const td = testing_data();
-    for (td) |data| {
-        const result = try encodeWithAllocator(testing.allocator, data.decoded);
-        try testing.expectEqualSlices(u8, result, data.encoded);
+    for (td) |d| {
+        const result = try encodeWithAllocator(testing.allocator, d.decoded);
+        try testing.expectEqualSlices(u8, result, d.encoded);
         testing.allocator.free(result);
     }
 }
 
 test "comptimeEncode" {
     const td = comptime testing_data();
-    inline for (td) |data| {
-        const result = comptimeEncode(data.decoded);
-        try testing.expectEqualSlices(u8, &result, data.encoded);
+    inline for (td) |d| {
+        const result = comptimeEncode(d.decoded);
+        try testing.expectEqualSlices(u8, &result, d.encoded);
     }
 }
 
@@ -250,6 +250,14 @@ test "getEncodedLengthUpperBound" {
 test "comptimeGetEncodedLength" {
     try testing.expect(6 == comptimeGetEncodedLength(&[_]u8{ 0, 0, 0, 13, 36 }));
 }
+
+test "t" {
+    const s = try std.fmt.allocPrint(testing.allocator, "{}", .{ std.fmt.fmtSliceHexLower("00f8917303bfa8ef24f292e8fa1419b20460ba064d") });
+    defer testing.allocator.free(s);
+    std.debug.print("\n{s}\n", .{s});
+    try testing.expectEqualSlices(u8, "303066383931373330336266613865663234663239326538666131343139623230343630626130363464", s);
+}
+// https://github.com/travisstaloch/protobuf-zig/blob/main/src/test-common.zig#L35
 
 const TestData = struct {
     encoded: []const u8,
