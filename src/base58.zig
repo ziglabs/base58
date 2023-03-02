@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 const testing = std.testing;
 
 const characters = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
 const digits = [128]u8{
     255, 255, 255, 255, 255, 255, 255, 255, // 0-7
     255, 255, 255, 255, 255, 255, 255, 255, // 8-15
@@ -22,70 +23,249 @@ const digits = [128]u8{
     55, 56, 57, 255, 255, 255, 255, 255, // 120-127
 };
 
-pub const Base58Error = error{ DataIsEmpty, InvalidCharacter, CarryNotZero, AllocatingBuffer, AllocationResult };
+pub const Base58Error = error{ EncodedIsEmpty, DecodedIsEmpty, InvalidCharacter, CharacterOutOfRange, CarryNotZero, CannotAllocateBuffer, CannotReallocate, BufferTooSmall };
 
-pub fn decode(allocator: Allocator, data: []const u8) Base58Error![]const u8 {
-    if (data.len == 0) return Base58Error.DataIsEmpty;
-
-    const buffer_length = 1 + data.len * 11 / 15;
-    var buffer = allocator.alloc(u8, buffer_length) catch return Base58Error.AllocatingBuffer;
-    defer allocator.free(buffer);
-
+pub fn decodeWithBuffer(buffer: []u8, encoded: []const u8) Base58Error![]const u8 {
+    if (encoded.len == 0) return Base58Error.EncodedIsEmpty;
+    if (buffer.len < encoded.len) return Base58Error.BufferTooSmall;
     std.mem.set(u8, buffer, 0);
-
-    for (data) |d58| {
-        if (d58 >= digits.len) return Base58Error.InvalidCharacter;
-        var carry: u32 = switch (digits[d58]) {
-            255 => return Base58Error.InvalidCharacter,
-            else => @as(u32, digits[d58]),
-        };
-        var index = buffer.len - 1;
-        while (true) : (index -= 1) {
-            carry += @as(u32, buffer[index]) * 58;
-            buffer[index] = @truncate(u8, carry);
-            carry /= 256;
-            if (index == 0) break;
+    var length: usize = 0;
+    for (encoded) |r| {
+        if (r >= digits.len) return Base58Error.CharacterOutOfRange;
+        var carry: u32 = digits[r];
+        if (carry == 255) return Base58Error.InvalidCharacter;
+        for (buffer[0..length]) |b, i| {
+            carry += @as(u32, b) * 58;
+            buffer[i] = @truncate(u8, carry);
+            carry >>= 8;
         }
-        if (carry != 0) return Base58Error.CarryNotZero;
+        while (carry > 0) : (carry >>= 8) {
+            buffer[length] = @truncate(u8, carry);
+            length += 1;
+        }
     }
-    var result = std.ArrayList(u8).init(allocator);
-    errdefer result.deinit();
-
-    for (data) |d58| {
-        if (d58 != characters[0]) break;
-        result.append(0) catch return Base58Error.AllocationResult;
+    for (encoded) |r| {
+        if (r != characters[0]) break;
+        buffer[length] = 0;
+        length += 1;
     }
-
-    var i: usize = 0;
-    while (i < buffer.len) : (i += 1) {
-        const b = buffer.ptr[i];
-        if (b != 0) break;
-    }
-    result.appendSlice(buffer[i..]) catch return error.AllocationResult;
-
-    return result.toOwnedSlice();
+    std.mem.reverse(u8, buffer[0..length]);
+    return buffer[0..length];
 }
 
-test "decode" {
-    const result = try decode(testing.allocator, "1211");
-    std.debug.print("\n{any}\n", .{result});
-    defer testing.allocator.free(result);
-    try testing.expect(true);
-    // try testing.expectEqualSlices(u8, result, "Hello World!");
+pub fn decodeWithAllocator(allocator: Allocator, encoded: []const u8) Base58Error![]const u8 {
+    if (encoded.len == 0) return Base58Error.EncodedIsEmpty;
+    const buffer = allocator.alloc(u8, getDecodedLengthUpperBound(encoded.len)) catch return Base58Error.CannotAllocateBuffer;
+    errdefer allocator.free(buffer);
+    const decoded = try decodeWithBuffer(buffer, encoded);
+    _ = allocator.realloc(buffer, decoded.len) catch return Base58Error.CannotReallocate;
+    return decoded;
 }
 
-// fn decodeAlloc(ally: Allocator, ...) ![]const u8 {
-//     const buf = try ally.alloc(u8, getEncodedLengthUpperBound(...));
-//     errdefer ally.free(buf);
-//     const result = try decodeBuffer(..., buf);
-//     _ = ally.resize(buf, result.len);
-//     return result;
-// }
+pub fn comptimeDecode(comptime encoded: []const u8) [comptimeGetDecodedLength(encoded)]u8 {
+    comptime {
+        @setEvalBranchQuota(100_000);
+        var buffer: [getDecodedLengthUpperBound(encoded.len)]u8 = undefined;
+        const decoded = decodeWithBuffer(&buffer, encoded) catch |err| {
+            @compileError("failed to decode base58 string: '" ++ @errorName(err) ++ "'");
+        };
+        return decoded[0..decoded.len].*;
+    }
+}
 
-// fn shrink(ally: Allocator, buf: anytype, new_size: usize) @TypeOf(buf) {
-//     if (ally.resize(buf, new_size)) return buf;
+pub fn getDecodedLengthUpperBound(encoded_length: usize) usize {
+    return encoded_length;
+}
 
-//     const new_buf = try ally.dupe(std.meta.Child(@TypeOf(buf)), buf);
-//     ally.free(buf);
-//     return new_buf;
-// }
+pub fn comptimeGetDecodedLength(comptime encoded: []const u8) usize {
+    comptime {
+        @setEvalBranchQuota(100_000);
+        var buffer = std.mem.zeroes([getDecodedLengthUpperBound(encoded.len)]u8);
+        var length: usize = 0;
+        for (encoded) |r| {
+            var carry: u32 = digits[r];
+            if (carry == 255) @compileError("failed to compute base58 string length: invalid character '" ++ [_]u8{r} ++ "'");
+            for (buffer[0..length]) |b, i| {
+                carry += @as(u32, b) * 58;
+                buffer[i] = @truncate(u8, carry);
+                carry >>= 8;
+            }
+            while (carry > 0) : (carry >>= 8) {
+                buffer[length] = @truncate(u8, carry);
+                length += 1;
+            }
+        }
+        for (encoded) |r| {
+            if (r != characters[0]) break;
+            length += 1;
+        }
+        return length;
+    }
+}
+
+pub fn encodeWithBuffer(buffer: []u8, decoded: []const u8) Base58Error![]const u8 {
+    if (decoded.len == 0) return Base58Error.DecodedIsEmpty;
+    if (buffer.len < getEncodedLengthUpperBound(decoded.len)) return Base58Error.BufferTooSmall;
+    std.mem.set(u8, buffer, 0);
+    var length: usize = 0;
+    for (decoded) |r| {
+        var carry: u32 = r;
+        for (buffer[0..length]) |b, i| {
+            carry += @as(u32, b) << 8;
+            buffer[i] = @intCast(u8, carry % 58);
+            carry /= 58;
+        }
+        while (carry > 0) : (carry /= 58) {
+            buffer[length] = @intCast(u8, carry % 58);
+            length += 1;
+        }
+    }
+    for (buffer[0..length]) |b, i| {
+        buffer[i] = characters[b];
+    }
+    for (decoded) |r| {
+        if (r != 0) break;
+        buffer[length] = characters[0];
+        length += 1;
+    }
+    std.mem.reverse(u8, buffer[0..length]);
+    return buffer[0..length];
+}
+
+pub fn encodeWithAllocator(allocator: Allocator, decoded: []const u8) Base58Error![]const u8 {
+    if (decoded.len == 0) return Base58Error.DecodedIsEmpty;
+    const buffer = allocator.alloc(u8, getEncodedLengthUpperBound(decoded.len)) catch return Base58Error.CannotAllocateBuffer;
+    errdefer allocator.free(buffer);
+    const encoded = try encodeWithBuffer(buffer, decoded);
+    _ = allocator.realloc(buffer, encoded.len) catch return Base58Error.CannotReallocate;
+    return encoded;
+}
+
+pub fn comptimeEncode(comptime decoded: []const u8) [comptimeGetEncodedLength(decoded)]u8 {
+    comptime {
+        @setEvalBranchQuota(100_000);
+        var buffer: [getEncodedLengthUpperBound(decoded.len)]u8 = undefined;
+        const encoded = encodeWithBuffer(&buffer, decoded) catch |err| {
+            @compileError("failed to base58 encode string: '" ++ @errorName(err) ++ "'");
+        };
+        return encoded[0..encoded.len].*;
+    }
+}
+
+pub fn getEncodedLengthUpperBound(decoded_length: usize) usize {
+    return decoded_length * 137 / 100 + 1;
+}
+
+pub fn comptimeGetEncodedLength(comptime decoded: []const u8) usize {
+    comptime {
+        @setEvalBranchQuota(100_000);
+        var buffer = std.mem.zeroes([getEncodedLengthUpperBound(decoded.len)]u8);
+        var length: usize = 0;
+        for (decoded) |r| {
+            var carry: u32 = r;
+            for (buffer[0..length]) |b, i| {
+                carry += @as(u32, b) << 8;
+                buffer[i] = @intCast(u8, carry % 58);
+                carry /= 58;
+            }
+            while (carry > 0) : (carry /= 58) {
+                buffer[length] = @intCast(u8, carry % 58);
+                length += 1;
+            }
+        }
+        for (decoded) |r| {
+            if (r != 0) break;
+            length += 1;
+        }
+        return length;
+    }
+}
+
+// decode
+test "decodeWithBuffer" {
+    var buffer: [100]u8 = undefined;
+    const td = testing_data();
+    for (td) |data| {
+        const result = try decodeWithBuffer(&buffer, data.encoded);
+        try testing.expectEqualSlices(u8, result, data.decoded);
+    }
+}
+
+test "decodeWithAllocator" {
+    const td = testing_data();
+    for (td) |data| {
+        const result = try decodeWithAllocator(testing.allocator, data.encoded);
+        try testing.expectEqualSlices(u8, result, data.decoded);
+        testing.allocator.free(result);
+    }
+}
+
+test "comptimeDecode" {
+    const td = comptime testing_data();
+    inline for (td) |data| {
+        const result = comptimeDecode(data.encoded);
+        try testing.expectEqualSlices(u8, &result, data.decoded);
+    }
+}
+
+test "getDecodedLengthUpperBound" {
+    try testing.expect(6 == getDecodedLengthUpperBound("111211".len));
+}
+
+test "comptimeGetDecodedLength" {
+    try testing.expect(5 == comptimeGetDecodedLength("111211"));
+}
+
+// // encode
+test "encodeWithBuffer" {
+    var buffer: [100]u8 = undefined;
+    const td = testing_data();
+    for (td) |data| {
+        const result = try encodeWithBuffer(&buffer, data.decoded);
+        try testing.expectEqualSlices(u8, result, data.encoded);
+    }
+}
+
+test "encodeWithAllocator" {
+    const td = testing_data();
+    for (td) |data| {
+        const result = try encodeWithAllocator(testing.allocator, data.decoded);
+        try testing.expectEqualSlices(u8, result, data.encoded);
+        testing.allocator.free(result);
+    }
+}
+
+test "comptimeEncode" {
+    const td = comptime testing_data();
+    inline for (td) |data| {
+        const result = comptimeEncode(data.decoded);
+        try testing.expectEqualSlices(u8, &result, data.encoded);
+    }
+}
+
+test "getEncodedLengthUpperBound" {
+    try testing.expect(7 == getEncodedLengthUpperBound(([_]u8{ 0, 0, 0, 13, 36 }).len));
+}
+
+test "comptimeGetEncodedLength" {
+    try testing.expect(6 == comptimeGetEncodedLength(&[_]u8{ 0, 0, 0, 13, 36 }));
+}
+
+const TestData = struct {
+    encoded: []const u8,
+    decoded: []const u8,
+};
+
+fn testing_data() []const TestData {
+    return &[_]TestData{
+        .{ .encoded = "USm3fpXnKG5EUBx2ndxBDMPVciP5hGey2Jh4NDv6gmeo1LkMeiKrLJUUBk6Z", .decoded = "The quick brown fox jumps over the lazy dog." },
+        .{ .encoded = "2NEpo7TZRRrLZSi2U", .decoded = "Hello World!" },
+        .{ .encoded = "11233QC4", .decoded = &[_]u8{ 0, 0, 40, 127, 180, 205 } },
+        .{ .encoded = "1", .decoded = &[_]u8{0} },
+        .{ .encoded = "2", .decoded = &[_]u8{1} },
+        .{ .encoded = "21", .decoded = &[_]u8{58} },
+        .{ .encoded = "211", .decoded = &[_]u8{ 13, 36 } },
+        .{ .encoded = "1211", .decoded = &[_]u8{ 0, 13, 36 } },
+        .{ .encoded = "111211", .decoded = &[_]u8{ 0, 0, 0, 13, 36 } },
+    };
+}
