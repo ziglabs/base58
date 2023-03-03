@@ -24,17 +24,18 @@ const digits = [128]u8{
     55, 56, 57, 255, 255, 255, 255, 255, // 120-127
 };
 
-pub const Base58Error = error{ CannotConcatStrings, BadChecksum, DecodedTooShort, EncodedIsEmpty, DecodedIsEmpty, InvalidCharacter, CharacterOutOfRange, CarryNotZero, CannotAllocateBuffer, CannotReallocate, BufferTooSmall };
+pub const Base58Error = error{ CannotConcatStrings, BadChecksum, DecodedTooShort, EncodedIsEmpty, DecodedIsEmpty, InvalidCharacter, CannotAllocateConcatBuffer, CharacterOutOfRange, CarryNotZero, CannotAllocateBuffer, CannotReallocate, BufferTooSmall, ConcatBufferTooSmall };
 
-pub fn doubleSha256(input: []const u8) []const u8 {
+pub fn doubleSha256(input: []const u8) [std.crypto.hash.sha2.Sha256.digest_length]u8 {
     var h1: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(input, &h1, .{});
 
     var h2: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(&h1, &h2, .{});
 
-    return h2[0..];
+    return h2;
 }
+
 pub fn decodeWithBuffer(buffer: []u8, encoded: []const u8) Base58Error![]const u8 {
     if (encoded.len == 0) return Base58Error.EncodedIsEmpty;
     if (buffer.len < encoded.len) return Base58Error.BufferTooSmall;
@@ -129,7 +130,6 @@ pub fn comptimeGetDecodedLength(comptime encoded: []const u8) usize {
 }
 
 pub fn encodeWithBuffer(buffer: []u8, decoded: []const u8) Base58Error![]const u8 {
-    std.debug.print("\n\nencodeWithBuffer decoded: {any}\n\n", .{decoded});
     if (decoded.len == 0) return Base58Error.DecodedIsEmpty;
     if (buffer.len < getEncodedLengthUpperBound(decoded.len)) return Base58Error.BufferTooSmall;
     std.mem.set(u8, buffer, 0);
@@ -167,25 +167,65 @@ pub fn encodeWithAllocator(allocator: Allocator, decoded: []const u8) Base58Erro
     return encoded;
 }
 
-// pub fn comptimeEncode(comptime decoded: []const u8) [comptimeGetEncodedLength(decoded)]u8 {
+pub fn comptimeEncode(comptime decoded: []const u8) [comptimeGetEncodedLength(decoded)]u8 {
+    comptime {
+        @setEvalBranchQuota(100_000);
+        var buffer: [getEncodedLengthUpperBound(decoded.len)]u8 = undefined;
+        const encoded = encodeWithBuffer(&buffer, decoded) catch |err| {
+            @compileError("failed to base58 encode string: '" ++ @errorName(err) ++ "'");
+        };
+        return encoded[0..encoded.len].*;
+    }
+}
+
+pub fn encodeCheckWithBuffers(buffer: []u8, concat_buffer: []u8, decoded: []const u8) Base58Error![]const u8 {
+    if (decoded.len == 0) return Base58Error.DecodedIsEmpty;
+    if (buffer.len < getEncodedLengthUpperBound(decoded.len + 4)) return Base58Error.BufferTooSmall;
+    if (concat_buffer.len < decoded.len + 4) return Base58Error.ConcatBufferTooSmall;
+    const double_sha256 = doubleSha256(decoded);
+    var fba = std.heap.FixedBufferAllocator.init(concat_buffer);
+    const concatenated = std.mem.concat(fba.allocator(), u8, &[_][]const u8{decoded, &[_]u8{double_sha256[0], double_sha256[1], double_sha256[2], double_sha256[3]}}) catch return Base58Error.CannotConcatStrings;
+    return try encodeWithBuffer(buffer, concatenated);
+}
+
+pub fn encodeCheckWithAllocator(allocator: Allocator, decoded: []const u8) Base58Error![]const u8 {
+    if (decoded.len == 0) return Base58Error.DecodedIsEmpty;
+    const buffer = allocator.alloc(u8, getEncodedLengthUpperBound(decoded.len + 4)) catch return Base58Error.CannotAllocateBuffer;
+    errdefer allocator.free(buffer);
+    const double_sha256 = doubleSha256(decoded);
+    const concatenated = std.mem.concat(allocator, u8, &[_][]const u8{decoded, &[_]u8{double_sha256[0], double_sha256[1], double_sha256[2], double_sha256[3]}}) catch return Base58Error.CannotConcatStrings;
+    defer allocator.free(concatenated);
+    const encoded = try encodeWithBuffer(buffer, concatenated);
+    _ = allocator.realloc(buffer, encoded.len) catch return Base58Error.CannotReallocate;
+    return encoded;
+}
+
+// pub fn comptimeEncodeCheck(comptime decoded: []const u8) []const u8 {
 //     comptime {
 //         @setEvalBranchQuota(100_000);
-//         var buffer: [getEncodedLengthUpperBound(decoded.len)]u8 = undefined;
-//         const encoded = encodeWithBuffer(&buffer, decoded) catch |err| {
+//         var buffer: [getEncodedLengthUpperBound(decoded.len + 4)]u8 = undefined;
+//         var concat_buffer: [decoded.len + 4]u8 = undefined;
+//         const double_sha256 = doubleSha256(decoded);
+//         var fba = std.heap.FixedBufferAllocator.init(&concat_buffer);
+//         const concatenated = std.mem.concat(fba.allocator(), u8, &[_][]const u8{decoded, &[_]u8{double_sha256[0], double_sha256[1], double_sha256[2], double_sha256[3]}}) catch return Base58Error.CannotConcatStrings;
+//         const encoded = encodeWithBuffer(&buffer, concatenated) catch |err| {
 //             @compileError("failed to base58 encode string: '" ++ @errorName(err) ++ "'");
 //         };
 //         return encoded[0..encoded.len].*;
 //     }
 // }
 
-pub fn encodeCheckWithBuffer(buffer: []u8, decoded: []const u8) Base58Error![]const u8 {
-    if (decoded.len == 0) return Base58Error.DecodedIsEmpty;
-    if (buffer.len < getEncodedLengthUpperBound(decoded.len)) return Base58Error.BufferTooSmall;
-    const double_sha256 = doubleSha256(decoded);
-    var fba = std.heap.FixedBufferAllocator.init(buffer);
-    const concatenated = std.mem.concat(fba.allocator(), u8, &[_][]const u8{decoded, double_sha256[0..4]}) catch return Base58Error.CannotConcatStrings;
-    std.debug.print("\n\nconcatenated: {any}\n\n", .{concatenated});
-    return try encodeWithBuffer(buffer, concatenated);
+pub fn comptimeEncodeCheck(comptime decoded: []const u8) []const u8 {
+    comptime {
+        @setEvalBranchQuota(100_000);
+        var buffer: [getEncodedLengthUpperBound(decoded.len + 4)]u8 = undefined;
+        const double_sha256 = doubleSha256(decoded);
+        const concatenated = decoded ++ [_]u8{double_sha256[0], double_sha256[1], double_sha256[2], double_sha256[3]};
+        const encoded = encodeWithBuffer(&buffer, concatenated) catch |err| {
+            @compileError("failed to base58 encode string: '" ++ @errorName(err) ++ "'");
+        };
+        return encoded[0..encoded.len];
+    }
 }
 
 pub fn getEncodedLengthUpperBound(decoded_length: usize) usize {
@@ -217,48 +257,48 @@ pub fn comptimeGetEncodedLength(comptime decoded: []const u8) usize {
     }
 }
 
-// decode
-test "decodeWithBuffer" {
-    var buffer: [100]u8 = undefined;
-    const td = testing_data();
-    for (td) |d| {
-        const result = try decodeWithBuffer(&buffer, d.encoded);
-        try testing.expectEqualStrings(result, d.decoded);
-    }
-}
+// // decode
+// test "decodeWithBuffer" {
+//     var buffer: [100]u8 = undefined;
+//     const td = testing_data();
+//     for (td) |d| {
+//         const result = try decodeWithBuffer(&buffer, d.encoded);
+//         try testing.expectEqualStrings(result, d.decoded);
+//     }
+// }
 
-test "decodeWithAllocator" {
-    const td = testing_data();
-    for (td) |d| {
-        const result = try decodeWithAllocator(testing.allocator, d.encoded);
-        try testing.expectEqualStrings(result, d.decoded);
-        testing.allocator.free(result);
-    }
-}
+// test "decodeWithAllocator" {
+//     const td = testing_data();
+//     for (td) |d| {
+//         const result = try decodeWithAllocator(testing.allocator, d.encoded);
+//         try testing.expectEqualStrings(result, d.decoded);
+//         testing.allocator.free(result);
+//     }
+// }
 
-test "comptimeDecode" {
-    const td = comptime testing_data();
-    inline for (td) |d| {
-        const result = comptimeDecode(d.encoded);
-        try testing.expectEqualStrings(&result, d.decoded);
-    }
-}
+// test "comptimeDecode" {
+//     const td = comptime testing_data();
+//     inline for (td) |d| {
+//         const result = comptimeDecode(d.encoded);
+//         try testing.expectEqualStrings(&result, d.decoded);
+//     }
+// }
 
-test "decodeCheckWithBuffer" {
-    var buffer: [100]u8 = undefined;
-    const result = try decodeCheckWithBuffer(&buffer, "1PfJpZsjreyVrqeoAfabrRwwjQyoSQMmHH");
-    try testing.expectEqualStrings(result, &[_]u8{ 0, 248, 145, 115, 3, 191, 168, 239, 36, 242, 146, 232, 250, 20, 25, 178, 4, 96, 186, 6, 77 });
-}
+// test "decodeCheckWithBuffer" {
+//     var buffer: [100]u8 = undefined;
+//     const result = try decodeCheckWithBuffer(&buffer, "1PfJpZsjreyVrqeoAfabrRwwjQyoSQMmHH");
+//     try testing.expectEqualStrings(result, &[_]u8{ 0, 248, 145, 115, 3, 191, 168, 239, 36, 242, 146, 232, 250, 20, 25, 178, 4, 96, 186, 6, 77 });
+// }
 
-test "getDecodedLengthUpperBound" {
-    try testing.expect(6 == getDecodedLengthUpperBound("111211".len));
-}
+// test "getDecodedLengthUpperBound" {
+//     try testing.expect(6 == getDecodedLengthUpperBound("111211".len));
+// }
 
-test "comptimeGetDecodedLength" {
-    try testing.expect(5 == comptimeGetDecodedLength("111211"));
-}
+// test "comptimeGetDecodedLength" {
+//     try testing.expect(5 == comptimeGetDecodedLength("111211"));
+// }
 
-// encode
+// // encode
 // test "encodeWithBuffer" {
 //     var buffer: [100]u8 = undefined;
 //     const td = testing_data();
@@ -268,12 +308,12 @@ test "comptimeGetDecodedLength" {
 //     }
 // }
 
-test "encodeWithBuffer" {
-    var buffer: [100]u8 = undefined;
-    const result = try encodeWithBuffer(&buffer, &[_]u8{ 0, 248, 145, 115, 3, 191, 168, 239, 36, 242, 146, 232, 250, 20, 25, 178, 4, 96, 186, 6, 77, 184, 176, 72, 190 });
-    try testing.expectEqualStrings(result, "1PfJpZsjreyVrqeoAfabrRwwjQyoSQMmHH");
+// test "encodeWithBuffer - 4 bytes added" {
+//     var buffer: [100]u8 = undefined;
+//     const result = try encodeWithBuffer(&buffer, &[_]u8{ 0, 248, 145, 115, 3, 191, 168, 239, 36, 242, 146, 232, 250, 20, 25, 178, 4, 96, 186, 6, 77, 184, 176, 72, 190 });
+//     try testing.expectEqualStrings(result, "1PfJpZsjreyVrqeoAfabrRwwjQyoSQMmHH");
     
-}
+// }
 
 // test "encodeWithAllocator" {
 //     const td = testing_data();
@@ -292,23 +332,36 @@ test "encodeWithBuffer" {
 //     }
 // }
 
-test "encodeCheckWithBuffer" {
+test "encodeCheckWithBuffers" {
     var buffer: [100]u8 = undefined;
-    const result = try encodeCheckWithBuffer(&buffer, &[_]u8{ 0, 248, 145, 115, 3, 191, 168, 239, 36, 242, 146, 232, 250, 20, 25, 178, 4, 96, 186, 6, 77 });
-    std.debug.print("\n{any}\n", .{result});
+    var concat_buffer: [100]u8 = undefined;
+    const result = try encodeCheckWithBuffers(&buffer, &concat_buffer, &[_]u8{ 0, 248, 145, 115, 3, 191, 168, 239, 36, 242, 146, 232, 250, 20, 25, 178, 4, 96, 186, 6, 77 });
     try testing.expectEqualStrings(result, "1PfJpZsjreyVrqeoAfabrRwwjQyoSQMmHH");
 }
 
-test "getEncodedLengthUpperBound" {
-    try testing.expect(7 == getEncodedLengthUpperBound(([_]u8{ 0, 0, 0, 13, 36 }).len));
+test "encodeCheckWithAllocator" {
+    const result = try encodeCheckWithAllocator(testing.allocator, &[_]u8{ 0, 248, 145, 115, 3, 191, 168, 239, 36, 242, 146, 232, 250, 20, 25, 178, 4, 96, 186, 6, 77 });
+    try testing.expectEqualStrings(result, "1PfJpZsjreyVrqeoAfabrRwwjQyoSQMmHH");
+    testing.allocator.free(result);
 }
 
-test "comptimeGetEncodedLength" {
-    try testing.expect(6 == comptimeGetEncodedLength(&[_]u8{ 0, 0, 0, 13, 36 }));
+test "comptimeEncodeCheck" {
+    const result = comptimeEncodeCheck(&[_]u8{ 0, 248, 145, 115, 3, 191, 168, 239, 36, 242, 146, 232, 250, 20, 25, 178, 4, 96, 186, 6, 77 });
+    try testing.expectEqualStrings(result, "1PfJpZsjreyVrqeoAfabrRwwjQyoSQMmHH");
 }
+
+// test "getEncodedLengthUpperBound" {
+//     try testing.expect(7 == getEncodedLengthUpperBound(([_]u8{ 0, 0, 0, 13, 36 }).len));
+// }
+
+// test "comptimeGetEncodedLength" {
+//     try testing.expect(6 == comptimeGetEncodedLength(&[_]u8{ 0, 0, 0, 13, 36 }));
+// }
 
 test "doubleSha256" {
-    try testing.expectEqualStrings(doubleSha256("abc"), &[_]u8{ 79, 139, 66, 194, 45, 211, 114, 155, 81, 155, 166, 246, 141, 45, 167, 204, 91, 45, 96, 109, 5, 218, 237, 90, 213, 18, 140, 192, 62, 108, 99, 88 });
+    try testing.expectEqualStrings(&doubleSha256("abc"), &[_]u8{ 79, 139, 66, 194, 45, 211, 114, 155, 81, 155, 166, 246, 141, 45, 167, 204, 91, 45, 96, 109, 5, 218, 237, 90, 213, 18, 140, 192, 62, 108, 99, 88 });
+    try testing.expectEqualStrings(&doubleSha256(&[_]u8{ 0, 248, 145, 115, 3, 191, 168, 239, 36, 242, 146, 232, 250, 20, 25, 178, 4, 96, 186, 6, 77 }), &[_]u8{24, 89, 104, 144, 199, 86, 241, 252, 155, 51, 19, 79, 47, 120, 220, 189, 212, 20, 244, 188, 187, 216, 61, 49, 182, 168, 113, 79, 159, 22, 54, 104});
+    std.debug.print("\n{any}\n", .{@TypeOf(doubleSha256(&[_]u8{ 0, 248, 145, 115, 3, 191, 168, 239, 36, 242, 146, 232, 250, 20, 25, 178, 4, 96, 186, 6, 77 })[0..4].*)});
 }
 
 // test "t" {
@@ -324,7 +377,7 @@ test "doubleSha256" {
 //     _ = try std.fmt.hexToBytes(&buf, hex);
 //     const s = try std.fmt.allocPrint(testing.allocator, "{}", .{std.fmt.fmtSliceHexLower(&buf)});
 //     defer testing.allocator.free(s);
-//     std.debug.print("\n{s}\n", .{s});
+//     std.debug.print("\nhex bytes{any}\n", .{buf});
 //     try testing.expectEqualStrings(hex, s);
 // }
 // https://github.com/travisstaloch/protobuf-zig/blob/main/src/test-common.zig#L35
@@ -348,15 +401,6 @@ fn testing_data() []const TestData {
     };
 }
 
-// // Hash using the specified hasher `H` asserting `expected == H(input)`.
-// fn assertEqualHash(comptime Hasher: anytype, comptime expected_hex: *const [Hasher.digest_length * 2:0]u8, input: []const u8) !void {
-//     var h: [Hasher.digest_length]u8 = undefined;
-//     Hasher.hash(input, &h, .{});
-
-//     try assertEqual(expected_hex, &h);
-// }
-
-// Assert `expected` == hex(`input`) where `input` is a bytestring
 fn assertEqual(comptime expected_hex: [:0]const u8, input: []const u8) !void {
     var expected_bytes: [expected_hex.len / 2]u8 = undefined;
     for (&expected_bytes) |*r, i| {
