@@ -36,6 +36,7 @@ pub fn doubleSha256(input: []const u8) [std.crypto.hash.sha2.Sha256.digest_lengt
     return h2;
 }
 
+// decode -----------------------------------------------------------------------------------------
 pub fn decodeWithBuffer(buffer: []u8, encoded: []const u8) Base58Error![]const u8 {
     if (encoded.len == 0) return Base58Error.EncodedIsEmpty;
     if (buffer.len < encoded.len) return Base58Error.BufferTooSmall;
@@ -80,10 +81,11 @@ pub fn comptimeDecode(comptime encoded: []const u8) [comptimeGetDecodedLength(en
         const decoded = decodeWithBuffer(&buffer, encoded) catch |err| {
             @compileError("failed to decode base58 string: '" ++ @errorName(err) ++ "'");
         };
-        return decoded[0..decoded.len].*;
+        return decoded[0..].*;
     }
 }
 
+// decode check -----------------------------------------------------------------------------------
 pub fn decodeCheckWithBuffer(buffer: []u8, encoded: []const u8) Base58Error![]const u8 {
     if (encoded.len == 0) return Base58Error.EncodedIsEmpty;
     if (buffer.len < encoded.len) return Base58Error.BufferTooSmall;
@@ -91,8 +93,8 @@ pub fn decodeCheckWithBuffer(buffer: []u8, encoded: []const u8) Base58Error![]co
     if (decoded.len < 4) return Base58Error.DecodedTooShort;
     const check_start = decoded.len - 4;
     const double_sha256 = doubleSha256(decoded[0..check_start]);
-    const hash_check = [_]u8{double_sha256[0], double_sha256[1], double_sha256[2], double_sha256[3]};
-    const data_check = [_]u8{decoded[check_start], decoded[check_start + 1], decoded[check_start + 2], decoded[check_start + 3]};
+    const hash_check = [_]u8{ double_sha256[0], double_sha256[1], double_sha256[2], double_sha256[3] };
+    const data_check = [_]u8{ decoded[check_start], decoded[check_start + 1], decoded[check_start + 2], decoded[check_start + 3] };
     const expected = std.mem.readIntLittle(u32, &hash_check);
     const actual = std.mem.readIntLittle(u32, &data_check);
     if (expected != actual) return Base58Error.BadChecksum;
@@ -105,14 +107,27 @@ pub fn decodeCheckWithAllocator(allocator: Allocator, encoded: []const u8) Base5
     if (decoded.len < 4) return Base58Error.DecodedTooShort;
     const check_start = decoded.len - 4;
     const double_sha256 = doubleSha256(decoded[0..check_start]);
-    const hash_check = [_]u8{double_sha256[0], double_sha256[1], double_sha256[2], double_sha256[3]};
-    const data_check = [_]u8{decoded[check_start], decoded[check_start + 1], decoded[check_start + 2], decoded[check_start + 3]};
+    const hash_check = [_]u8{ double_sha256[0], double_sha256[1], double_sha256[2], double_sha256[3] };
+    const data_check = [_]u8{ decoded[check_start], decoded[check_start + 1], decoded[check_start + 2], decoded[check_start + 3] };
     const expected = std.mem.readIntLittle(u32, &hash_check);
     const actual = std.mem.readIntLittle(u32, &data_check);
     if (expected != actual) return Base58Error.BadChecksum;
     return decoded[0..check_start];
 }
 
+// TODO: hashing during comptime is broken - https://discord.com/channels/605571803288698900/1081022464911474839
+pub fn comptimeDecodeCheck(comptime encoded: []const u8) [comptimeGetDecodedLength(encoded)]u8 {
+    comptime {
+        @setEvalBranchQuota(100_000);
+        var buffer: [getDecodedLengthUpperBound(encoded.len)]u8 = undefined;
+        const decoded = decodeCheckWithBuffer(&buffer, encoded) catch |err| {
+            @compileError("failed to decode base58 string: '" ++ @errorName(err) ++ "'");
+        };
+        return decoded[0..].*;
+    }
+}
+
+// get decode length ------------------------------------------------------------------------------
 pub fn getDecodedLengthUpperBound(encoded_length: usize) usize {
     return encoded_length;
 }
@@ -143,6 +158,7 @@ pub fn comptimeGetDecodedLength(comptime encoded: []const u8) usize {
     }
 }
 
+// encode -----------------------------------------------------------------------------------------
 pub fn encodeWithBuffer(buffer: []u8, decoded: []const u8) Base58Error![]const u8 {
     if (decoded.len == 0) return Base58Error.DecodedIsEmpty;
     if (buffer.len < getEncodedLengthUpperBound(decoded.len)) return Base58Error.BufferTooSmall;
@@ -192,13 +208,14 @@ pub fn comptimeEncode(comptime decoded: []const u8) [comptimeGetEncodedLength(de
     }
 }
 
+// encode check -----------------------------------------------------------------------------------
 pub fn encodeCheckWithBuffers(buffer: []u8, concat_buffer: []u8, decoded: []const u8) Base58Error![]const u8 {
     if (decoded.len == 0) return Base58Error.DecodedIsEmpty;
     if (buffer.len < getEncodedLengthUpperBound(decoded.len + 4)) return Base58Error.BufferTooSmall;
     if (concat_buffer.len < decoded.len + 4) return Base58Error.ConcatBufferTooSmall;
     const double_sha256 = doubleSha256(decoded);
     var fba = std.heap.FixedBufferAllocator.init(concat_buffer);
-    const concatenated = std.mem.concat(fba.allocator(), u8, &[_][]const u8{decoded, &[_]u8{double_sha256[0], double_sha256[1], double_sha256[2], double_sha256[3]}}) catch return Base58Error.CannotConcatStrings;
+    const concatenated = std.mem.concat(fba.allocator(), u8, &[_][]const u8{ decoded, &[_]u8{ double_sha256[0], double_sha256[1], double_sha256[2], double_sha256[3] } }) catch return Base58Error.CannotConcatStrings;
     return try encodeWithBuffer(buffer, concatenated);
 }
 
@@ -207,7 +224,7 @@ pub fn encodeCheckWithAllocator(allocator: Allocator, decoded: []const u8) Base5
     const buffer = allocator.alloc(u8, getEncodedLengthUpperBound(decoded.len + 4)) catch return Base58Error.CannotAllocateBuffer;
     errdefer allocator.free(buffer);
     const double_sha256 = doubleSha256(decoded);
-    const concatenated = std.mem.concat(allocator, u8, &[_][]const u8{decoded, &[_]u8{double_sha256[0], double_sha256[1], double_sha256[2], double_sha256[3]}}) catch return Base58Error.CannotConcatStrings;
+    const concatenated = std.mem.concat(allocator, u8, &[_][]const u8{ decoded, &[_]u8{ double_sha256[0], double_sha256[1], double_sha256[2], double_sha256[3] } }) catch return Base58Error.CannotConcatStrings;
     defer allocator.free(concatenated);
     const encoded = try encodeWithBuffer(buffer, concatenated);
     _ = allocator.realloc(buffer, encoded.len) catch return Base58Error.CannotReallocate;
@@ -219,15 +236,14 @@ pub fn comptimeEncodeCheck(comptime decoded: []const u8) []const u8 {
     comptime {
         @setEvalBranchQuota(100_000);
         var buffer: [getEncodedLengthUpperBound(decoded.len + 4)]u8 = undefined;
-        const double_sha256 = doubleSha256(decoded);
-        const concatenated = decoded ++ double_sha256[0..4].*;
-        const encoded = encodeWithBuffer(&buffer, concatenated) catch |err| {
-            @compileError("failed to base58 encode string: '" ++ @errorName(err) ++ "'");
+        var concat_buffer: [decoded.len + 4]u8 = undefined;
+        return encodeCheckWithBuffers(&buffer, &concat_buffer, decoded) catch |err| {
+            @compileError("failed to base58 check encode string: '" ++ @errorName(err) ++ "'");
         };
-        return encoded[0..];
     }
 }
 
+// get encode length ------------------------------------------------------------------------------
 pub fn getEncodedLengthUpperBound(decoded_length: usize) usize {
     return decoded_length * 137 / 100 + 1;
 }
@@ -257,7 +273,7 @@ pub fn comptimeGetEncodedLength(comptime decoded: []const u8) usize {
     }
 }
 
-// // decode
+// decode
 test "decodeWithBuffer" {
     var buffer: [100]u8 = undefined;
     const td = testing_data();
@@ -360,7 +376,7 @@ test "comptimeGetEncodedLength" {
 
 test "doubleSha256" {
     try testing.expectEqualStrings(&doubleSha256("abc"), &[_]u8{ 79, 139, 66, 194, 45, 211, 114, 155, 81, 155, 166, 246, 141, 45, 167, 204, 91, 45, 96, 109, 5, 218, 237, 90, 213, 18, 140, 192, 62, 108, 99, 88 });
-    try testing.expectEqualStrings(&doubleSha256(&[_]u8{ 0, 248, 145, 115, 3, 191, 168, 239, 36, 242, 146, 232, 250, 20, 25, 178, 4, 96, 186, 6, 77 }), &[_]u8{24, 89, 104, 144, 199, 86, 241, 252, 155, 51, 19, 79, 47, 120, 220, 189, 212, 20, 244, 188, 187, 216, 61, 49, 182, 168, 113, 79, 159, 22, 54, 104});
+    try testing.expectEqualStrings(&doubleSha256(&[_]u8{ 0, 248, 145, 115, 3, 191, 168, 239, 36, 242, 146, 232, 250, 20, 25, 178, 4, 96, 186, 6, 77 }), &[_]u8{ 24, 89, 104, 144, 199, 86, 241, 252, 155, 51, 19, 79, 47, 120, 220, 189, 212, 20, 244, 188, 187, 216, 61, 49, 182, 168, 113, 79, 159, 22, 54, 104 });
 }
 
 // test "hex 1" {
