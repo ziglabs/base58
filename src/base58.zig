@@ -312,6 +312,12 @@ test "decodeCheckWithAllocator" {
     testing.allocator.free(result);
 }
 
+// TODO: hashing during comptime is broken - https://discord.com/channels/605571803288698900/1081022464911474839
+// test "comptimeDecodeCheck" {
+//     const result = comptimeDecodeCheck("1PfJpZsjreyVrqeoAfabrRwwjQyoSQMmHH");
+//     try testing.expectEqualStrings(result, &[_]u8{ 0, 248, 145, 115, 3, 191, 168, 239, 36, 242, 146, 232, 250, 20, 25, 178, 4, 96, 186, 6, 77 });
+// }
+
 test "getDecodedLengthUpperBound" {
     try testing.expect(6 == getDecodedLengthUpperBound("111211".len));
 }
