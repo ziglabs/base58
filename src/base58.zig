@@ -363,14 +363,15 @@ test "doubleSha256" {
     try testing.expectEqualStrings(&doubleSha256(&[_]u8{ 0, 248, 145, 115, 3, 191, 168, 239, 36, 242, 146, 232, 250, 20, 25, 178, 4, 96, 186, 6, 77 }), &[_]u8{24, 89, 104, 144, 199, 86, 241, 252, 155, 51, 19, 79, 47, 120, 220, 189, 212, 20, 244, 188, 187, 216, 61, 49, 182, 168, 113, 79, 159, 22, 54, 104});
 }
 
-// test "t" {
+// test "hex 1" {
 //     const s = try std.fmt.allocPrint(testing.allocator, "{}", .{ std.fmt.fmtSliceHexLower("00f8917303bfa8ef24f292e8fa1419b20460ba064d") });
 //     defer testing.allocator.free(s);
 //     std.debug.print("\n{s}\n", .{s});
 //     try testing.expectEqualStrings("303066383931373330336266613865663234663239326538666131343139623230343630626130363464", s);
 // }
+// https://discord.com/channels/605571803288698900/1080707312739696710
 
-// test "t2" {
+// test "hex 2" {
 //     const hex = "00f8917303bfa8ef24f292e8fa1419b20460ba064d";
 //     var buf: [hex.len / 2]u8 = undefined;
 //     _ = try std.fmt.hexToBytes(&buf, hex);
@@ -398,13 +399,4 @@ fn testing_data() []const TestData {
         .{ .encoded = "1211", .decoded = &[_]u8{ 0, 13, 36 } },
         .{ .encoded = "111211", .decoded = &[_]u8{ 0, 0, 0, 13, 36 } },
     };
-}
-
-fn assertEqual(comptime expected_hex: [:0]const u8, input: []const u8) !void {
-    var expected_bytes: [expected_hex.len / 2]u8 = undefined;
-    for (&expected_bytes) |*r, i| {
-        r.* = fmt.parseInt(u8, expected_hex[2 * i .. 2 * i + 2], 16) catch unreachable;
-    }
-
-    try testing.expectEqualStrings(&expected_bytes, input);
 }
